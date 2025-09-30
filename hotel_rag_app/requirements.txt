@@ -1,0 +1,7 @@
+Flask
+PyPDF2
+langchain
+faiss-cpu
+cohere
+werkzeug
+gunicorn

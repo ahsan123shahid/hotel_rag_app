@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📚 Browse Document Content</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="browse-container">
+        <header class="browse-header">
+            <div class="header-content">
+                <h1><i class="fas fa-search"></i> Document Browser</h1>
+                <div class="header-actions">
+                    <a href="/" class="btn-secondary">
+                        <i class="fas fa-home"></i> Home
+                    </a>
+                    {% if hotel_key %}
+                    <a href="/chat?hotel={{ hotel_key }}" class="btn-primary">
+                        <i class="fas fa-comments"></i> Chat with Document
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if hotel and hotel.name %}
+            <div class="document-info">
+                <div class="document-name">
+                    <i class="fas fa-file-pdf"></i>
+                    {{ hotel.name }}
+                </div>
+                <div class="document-meta">
+                    {% if hotel.uploaded_at %}
+                    <span class="upload-date">
+                        <i class="fas fa-clock"></i>
+                        Uploaded: {{ hotel.uploaded_at[:10] }}
+                    </span>
+                    {% endif %}
+                    {% if hotel.chunk_count %}
+                    <span class="chunk-count">
+                        <i class="fas fa-puzzle-piece"></i>
+                        {{ hotel.chunk_count }} chunks indexed
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </header>
+
+        <div class="browse-main">
+            {% if error %}
+            <div class="error-container">
+                <div class="error-content">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <h3>Error Loading Document</h3>
+                    <p>{{ error }}</p>
+                    <a href="/" class="btn-primary">
+                        <i class="fas fa-arrow-left"></i> Back to Upload
+                    </a>
+                </div>
+            </div>
+            {% elif not sources %}
+            <div class="empty-container">
+                <div class="empty-content">
+                    <i class="fas fa-file-alt"></i>
+                    <h3>No Content Found</h3>
+                    <p>This document doesn't appear to have any indexed content.</p>
+                    <a href="/" class="btn-primary">
+                        <i class="fas fa-arrow-left"></i> Back to Upload
+                    </a>
+                </div>
+            </div>
+            {% else %}
+            <div class="browse-controls">
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="Search content..." />
+                    <i class="fas fa-search search-icon"></i>
+                </div>
+                <div class="view-controls">
+                    <button id="expandAllBtn" class="btn-small btn-secondary">
+                        <i class="fas fa-expand-alt"></i> Expand All
+                    </button>
+                    <button id="collapseAllBtn" class="btn-small btn-secondary">
+                        <i class="fas fa-compress-alt"></i> Collapse All
+                    </button>
+                </div>
+            </div>
+
+            <div class="sources-container" id="sourcesContainer">
+                {% for source, chunks in sources.items() %}
+                <div class="source-section" data-source="{{ source }}">
+                    <div class="source-header" onclick="toggleSource(this)">
+                        <div class="source-title">
+                            <i class="fas fa-file-pdf source-icon"></i>
+                            <span class="source-name">{{ source }}</span>
+                            <span class="chunk-badge">{{ chunks|length }} chunks</span>
+                        </div>
+                        <div class="source-toggle">
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                    </div>
+
+                    <div class="source-content">
+                        <div class="chunks-grid">
+                            {% for chunk in chunks %}
+                            <div class="chunk-card" data-chunk="{{ chunk.chunk }}">
+                                <div class="chunk-header">
+                                    <span class="chunk-number">
+                                        <i class="fas fa-puzzle-piece"></i>
+                                        Chunk {{ chunk.chunk }}
+                                    </span>
+                                    {% if chunk.indexed_at and chunk.indexed_at != 'Unknown' %}
+                                    <span class="chunk-date">
+                                        <i class="fas fa-clock"></i>
+                                        {{ chunk.indexed_at[:10] }}
+                                    </span>
+                                    {% endif %}
+                                </div>
+                                <div class="chunk-content">
+                                    {{ chunk.text }}
+                                </div>
+                                <div class="chunk-actions">
+                                    <button class="btn-tiny" onclick="copyChunk(this)" title="Copy to clipboard">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                    <button class="btn-tiny" onclick="askAboutChunk({{ chunk.chunk }})" title="Ask AI about this chunk">
+                                        <i class="fas fa-question-circle"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="browse-stats">
+                <div class="stats-item">
+                    <i class="fas fa-file-alt"></i>
+                    <span>{{ sources|length }} source file(s)</span>
+                </div>
+                <div class="stats-item">
+                    <i class="fas fa-puzzle-piece"></i>
+                    <span>{{ sources.values() | map('length') | sum }} total chunks</span>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        let allSources = [];
+
+        document.addEventListener('DOMContentLoaded', function() {
+            allSources = Array.from(document.querySelectorAll('.source-section'));
+            setupSearch();
+            setupControls();
+
+            // Auto-expand first source if only one
+            if (allSources.length === 1) {
+                const firstHeader = allSources[0].querySelector('.source-header');
+                toggleSource(firstHeader);
+            }
+        });
+
+        function setupSearch() {
+            const searchInput = document.getElementById('searchInput');
+            if (!searchInput) return;
+
+            let searchTimeout;
+            searchInput.addEventListener('input', function(e) {
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
+                    performSearch(e.target.value);
+                }, 300);
+            });
+        }
+
+        function setupControls() {
+            const expandBtn = document.getElementById('expandAllBtn');
+            const collapseBtn = document.getElementById('collapseAllBtn');
+
+            if (expandBtn) {
+                expandBtn.addEventListener('click', () => {
+                    allSources.forEach(source => {
+                        const header = source.querySelector('.source-header');
+                        if (!source.classList.contains('expanded')) {
+                            toggleSource(header);
+                        }
+                    });
+                });
+            }
+
+            if (collapseBtn) {
+                collapseBtn.addEventListener('click', () => {
+                    allSources.forEach(source => {
+                        const header = source.querySelector('.source-header');
+                        if (source.classList.contains('expanded')) {
+                            toggleSource(header);
+                        }
+                    });
+                });
+            }
+        }
+
+        function performSearch(query) {
+            const lowerQuery = query.toLowerCase();
+
+            allSources.forEach(source => {
+                const chunks = source.querySelectorAll('.chunk-card');
+                let hasVisibleChunks = false;
+
+                chunks.forEach(chunk => {
+                    const text = chunk.querySelector('.chunk-content').textContent.toLowerCase();
+                    const matches = !query || text.includes(lowerQuery);
+
+                    chunk.style.display = matches ? 'block' : 'none';
+                    if (matches) hasVisibleChunks = true;
+
+                    // Highlight search terms
+                    if (query && matches) {
+                        highlightText(chunk.querySelector('.chunk-content'), query);
+                    } else {
+                        removeHighlights(chunk.querySelector('.chunk-content'));
+                    }
+                });
+
+                // Show/hide entire source section
+                source.style.display = hasVisibleChunks ? 'block' : 'none';
+
+                // Auto-expand sources with matches
+                if (hasVisibleChunks && query && !source.classList.contains('expanded')) {
+                    toggleSource(source.querySelector('.source-header'));
+                }
+            });
+
+            // Show message if no results
+            const visibleSources = allSources.filter(s => s.style.display !== 'none');
+            const container = document.getElementById('sourcesContainer');
+
+            if (visibleSources.length === 0 && query) {
+                if (!document.getElementById('noResults')) {
+                    const noResults = document.createElement('div');
+                    noResults.id = 'noResults';
+                    noResults.className = 'no-results';
+                    noResults.innerHTML = `
+                        <i class="fas fa-search"></i>
+                        <p>No content found matching "${query}"</p>
+                    `;
+                    container.appendChild(noResults);
+                }
+            } else {
+                const noResults = document.getElementById('noResults');
+                if (noResults) noResults.remove();
+            }
+        }
+
+        function highlightText(element, query) {
+            const originalText = element.dataset.originalText || element.textContent;
+            element.dataset.originalText = originalText;
+
+            const regex = new RegExp(`(${escapeRegex(query)})`, 'gi');
+            const highlightedText = originalText.replace(regex, '<mark>$1</mark>');
+            element.innerHTML = highlightedText;
+        }
+
+        function removeHighlights(element) {
+            if (element.dataset.originalText) {
+                element.textContent = element.dataset.originalText;
+                delete element.dataset.originalText;
+            }
+        }
+
+        function escapeRegex(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function toggleSource(headerElement) {
+            const sourceSection = headerElement.closest('.source-section');
+            const isExpanded = sourceSection.classList.contains('expanded');
+            const toggleIcon = headerElement.querySelector('.source-toggle i');
+
+            if (isExpanded) {
+                sourceSection.classList.remove('expanded');
+                toggleIcon.className = 'fas fa-chevron-down';
+            } else {
+                sourceSection.classList.add('expanded');
+                toggleIcon.className = 'fas fa-chevron-up';
+            }
+        }
+
+        function copyChunk(button) {
+            const chunkCard = button.closest('.chunk-card');
+            const content = chunkCard.querySelector('.chunk-content').textContent;
+
+            navigator.clipboard.writeText(content).then(() => {
+                const originalIcon = button.innerHTML;
+                button.innerHTML = '<i class="fas fa-check"></i>';
+                button.style.color = '#22c55e';
+
+                setTimeout(() => {
+                    button.innerHTML = originalIcon;
+                    button.style.color = '';
+                }, 2000);
+            }).catch(() => {
+                alert('Failed to copy to clipboard');
+            });
+        }
+
+        function askAboutChunk(chunkNumber) {
+            const hotelKey = '{{ hotel_key }}';
+            if (hotelKey) {
+                const url = `/chat?hotel=${hotelKey}`;
+                window.open(url, '_blank');
+            } else {
+                alert('Cannot open chat - hotel key not available');
+            }
+        }
+    </script>
+</body>
+</html>

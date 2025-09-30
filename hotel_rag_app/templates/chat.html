@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>💬 Hotel Chat - AI Assistant</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="chat-container">
+        <header class="chat-header">
+            <div class="header-content">
+                <h1><i class="fas fa-comments"></i> Hotel AI Assistant</h1>
+                <a href="/" class="btn-secondary">
+                    <i class="fas fa-home"></i> Back to Upload
+                </a>
+            </div>
+
+            <div class="hotel-selector">
+                <label for="hotelSelect">
+                    <i class="fas fa-hotel"></i> Select Document:
+                </label>
+                <select id="hotelSelect">
+                    <option value="">Loading documents...</option>
+                </select>
+                <button id="refreshHotels" class="btn-small btn-secondary" title="Refresh document list">
+                    <i class="fas fa-refresh"></i>
+                </button>
+            </div>
+        </header>
+
+        <div class="chat-main">
+            <div id="chat-messages" class="chat-messages">
+                <div class="message message-system">
+                    <div class="message-content">
+                        <i class="fas fa-info-circle"></i>
+                        <div class="message-text">
+                            <p>Welcome to the Hotel AI Assistant! Select a document above and ask me anything about:</p>
+                            <ul>
+                                <li>Room rates and pricing</li>
+                                <li>Hotel amenities and facilities</li>
+                                <li>Policies and procedures</li>
+                                <li>Location and transfers</li>
+                                <li>Special offers and packages</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <div class="suggested-questions" id="suggestedQuestions">
+                    <div class="suggested-title">
+                        <i class="fas fa-lightbulb"></i> Try asking:
+                    </div>
+                    <div class="suggested-buttons">
+                        <button class="suggested-btn" onclick="askSuggested('What are the room rates?')">
+                            What are the room rates?
+                        </button>
+                        <button class="suggested-btn" onclick="askSuggested('What amenities are available?')">
+                            What amenities are available?
+                        </button>
+                        <button class="suggested-btn" onclick="askSuggested('What is the cancellation policy?')">
+                            What is the cancellation policy?
+                        </button>
+                        <button class="suggested-btn" onclick="askSuggested('How do I get to the hotel?')">
+                            How do I get to the hotel?
+                        </button>
+                    </div>
+                </div>
+
+                <div class="input-wrapper">
+                    <textarea
+                        id="queryInput"
+                        placeholder="Ask me anything about the hotel..."
+                        rows="2"
+                        maxlength="500"
+                    ></textarea>
+                    <button id="sendBtn" class="btn-primary" disabled title="Select a document first">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>
+
+                <div class="input-footer">
+                    <span class="char-count" id="charCount">0/500</span>
+                    <span class="model-info">
+
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentHotel = '';
+        let isProcessing = false;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadHotels();
+            setupEventListeners();
+
+            // Check if hotel was pre-selected from URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const selectedHotel = urlParams.get('hotel');
+            if (selectedHotel) {
+                setTimeout(() => {
+                    const select = document.getElementById('hotelSelect');
+                    select.value = selectedHotel;
+                    select.dispatchEvent(new Event('change'));
+                }, 1000);
+            }
+        });
+
+        function setupEventListeners() {
+            const queryInput = document.getElementById('queryInput');
+            const sendBtn = document.getElementById('sendBtn');
+            const hotelSelect = document.getElementById('hotelSelect');
+            const charCount = document.getElementById('charCount');
+
+            // Hotel selection
+            hotelSelect.addEventListener('change', function(e) {
+                currentHotel = e.target.value;
+                const isSelected = currentHotel !== '';
+
+                sendBtn.disabled = !isSelected;
+                sendBtn.title = isSelected ? 'Send message' : 'Select a document first';
+                queryInput.disabled = !isSelected;
+
+                if (isSelected) {
+                    queryInput.placeholder = `Ask me anything about ${e.target.options[e.target.selectedIndex].text}...`;
+                    document.getElementById('suggestedQuestions').style.display = 'block';
+                } else {
+                    queryInput.placeholder = 'Select a document first...';
+                    document.getElementById('suggestedQuestions').style.display = 'none';
+                }
+            });
+
+            // Character counter
+            queryInput.addEventListener('input', function() {
+                const length = this.value.length;
+                charCount.textContent = `${length}/500`;
+                charCount.classList.toggle('char-limit-warning', length > 450);
+            });
+
+            // Send message on Enter (Shift+Enter for new line)
+            queryInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+
+            // Send button click
+            sendBtn.addEventListener('click', sendMessage);
+
+            // Refresh hotels button
+            document.getElementById('refreshHotels').addEventListener('click', loadHotels);
+        }
+
+        async function loadHotels() {
+            try {
+                const select = document.getElementById('hotelSelect');
+                select.innerHTML = '<option value="">Loading...</option>';
+
+                const response = await fetch('/hotels');
+                const data = await response.json();
+
+                if (data.hotels && data.hotels.length > 0) {
+                    select.innerHTML = '<option value="">Select a document...</option>' +
+                        data.hotels.map(hotel =>
+                            `<option value="${hotel.key}">${hotel.name} (${hotel.chunk_count || 0} chunks)</option>`
+                        ).join('');
+                } else {
+                    select.innerHTML = '<option value="">No documents available</option>';
+                }
+            } catch (error) {
+                console.error('Failed to load hotels:', error);
+                document.getElementById('hotelSelect').innerHTML =
+                    '<option value="">Error loading documents</option>';
+            }
+        }
+
+        function askSuggested(question) {
+            if (!currentHotel) {
+                alert('Please select a document first');
+                return;
+            }
+
+            document.getElementById('queryInput').value = question;
+            sendMessage();
+        }
+
+        async function sendMessage() {
+            const queryInput = document.getElementById('queryInput');
+            const query = queryInput.value.trim();
+
+            if (!query || !currentHotel || isProcessing) return;
+
+            isProcessing = true;
+            const sendBtn = document.getElementById('sendBtn');
+            const originalBtnContent = sendBtn.innerHTML;
+
+            // Update UI
+            sendBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            sendBtn.disabled = true;
+            queryInput.disabled = true;
+
+            // Hide suggestions after first message
+            document.getElementById('suggestedQuestions').style.display = 'none';
+
+            // Add user message
+            addMessage(query, 'user');
+            queryInput.value = '';
+            document.getElementById('charCount').textContent = '0/500';
+
+            try {
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        hotel: currentHotel,
+                        query: query
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    addMessage(data.answer, 'assistant', {
+                        citations: data.citations,
+                        category: data.category,
+                        chunks_used: data.chunks_used
+                    });
+                } else {
+                    addMessage(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                addMessage(`Connection error: ${error.message}`, 'error');
+            } finally {
+                isProcessing = false;
+                sendBtn.innerHTML = originalBtnContent;
+                sendBtn.disabled = false;
+                queryInput.disabled = false;
+                queryInput.focus();
+            }
+        }
+
+        function addMessage(content, type, metadata = {}) {
+            const messagesContainer = document.getElementById('chat-messages');
+            const messageEl = document.createElement('div');
+            messageEl.className = `message message-${type}`;
+
+            let messageContent = `
+                <div class="message-content">
+                    <div class="message-icon">
+                        <i class="fas fa-${getMessageIcon(type)}"></i>
+                    </div>
+                    <div class="message-text">${formatMessage(content)}</div>
+                </div>
+            `;
+
+            if (metadata.citations && metadata.citations.length > 0) {
+                messageContent += `
+                    <div class="message-metadata">
+                        <div class="message-category">
+                            <i class="fas fa-tag"></i>
+                            Category: ${metadata.category || 'General'}
+                        </div>
+                        <div class="message-citations">
+                            <i class="fas fa-book"></i>
+                            Sources: ${metadata.citations.join(', ')}
+                        </div>
+                        <div class="chunks-info">
+                            <i class="fas fa-puzzle-piece"></i>
+                            ${metadata.chunks_used || 0} chunks analyzed
+                        </div>
+                    </div>
+                `;
+            }
+
+            messageEl.innerHTML = messageContent;
+            messagesContainer.appendChild(messageEl);
+
+            // Scroll to bottom
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function getMessageIcon(type) {
+            const icons = {
+                'user': 'user',
+                'assistant': 'robot',
+                'system': 'info-circle',
+                'error': 'exclamation-triangle'
+            };
+            return icons[type] || 'comment';
+        }
+
+        function formatMessage(content) {
+            // Convert line breaks to HTML
+            return content.replace(/\n/g, '<br>');
+        }
+
+        // Auto-resize textarea
+        document.getElementById('queryInput').addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+    </script>
+</body>
+</html>

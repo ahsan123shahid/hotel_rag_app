@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🏨 Hotel RAG System</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1><i class="fas fa-hotel"></i> Hotel Document AI</h1>
+            <p class="subtitle">Upload hotel brochures and chat with your documents using AI</p>
+        </header>
+
+        <div class="upload-section">
+            <h2><i class="fas fa-cloud-upload-alt"></i> Upload Hotel Brochures</h2>
+            <form id="uploadForm" class="upload-form">
+                <div class="file-input-wrapper">
+                    <input type="file" id="files" name="files[]" multiple accept=".pdf" required>
+                    <label for="files" class="file-input-label">
+                        <i class="fas fa-file-pdf"></i>
+                        <span>Choose PDF files or drag & drop</span>
+                    </label>
+                </div>
+                <button type="submit" class="btn-primary" id="uploadBtn">
+                    <i class="fas fa-upload"></i> Upload & Index
+                </button>
+            </form>
+
+            <div id="upload-progress" class="progress-container hidden">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <p class="progress-text" id="progressText">Processing...</p>
+            </div>
+
+            <div id="result" class="result-container"></div>
+        </div>
+
+        <div class="hotels-section">
+            <div class="section-header">
+                <h2><i class="fas fa-folder"></i> Your Hotel Documents</h2>
+                <div class="section-actions">
+                    <button onclick="loadHotels()" class="btn-secondary">
+                        <i class="fas fa-refresh"></i> Refresh
+                    </button>
+                    <a href="/chat" class="btn-primary">
+                        <i class="fas fa-comments"></i> Go to Chat
+                    </a>
+                </div>
+            </div>
+
+            <div id="hotel-list" class="hotel-grid">
+                <div class="loading-spinner">
+                    <i class="fas fa-spinner fa-spin"></i> Loading...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let uploadInProgress = false;
+
+        // File input handling
+        const fileInput = document.getElementById('files');
+        const fileInputLabel = document.querySelector('.file-input-label span');
+
+        fileInput.addEventListener('change', function(e) {
+            const fileCount = e.target.files.length;
+            if (fileCount > 0) {
+                fileInputLabel.textContent = `${fileCount} file(s) selected`;
+            } else {
+                fileInputLabel.textContent = 'Choose PDF files or drag & drop';
+            }
+        });
+
+        // Drag and drop handling
+        const uploadSection = document.querySelector('.upload-section');
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            uploadSection.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            uploadSection.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            uploadSection.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight() {
+            uploadSection.classList.add('drag-over');
+        }
+
+        function unhighlight() {
+            uploadSection.classList.remove('drag-over');
+        }
+
+        uploadSection.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            fileInput.files = files;
+
+            const event = new Event('change', { bubbles: true });
+            fileInput.dispatchEvent(event);
+        }
+
+        async function loadHotels() {
+            try {
+                const res = await fetch("/hotels");
+                const data = await res.json();
+                const hotelListEl = document.getElementById("hotel-list");
+
+                if (data.hotels && data.hotels.length > 0) {
+                    hotelListEl.innerHTML = data.hotels.map(hotel => `
+                        <div class="hotel-card">
+                            <div class="hotel-info">
+                                <div class="hotel-name">
+                                    <i class="fas fa-file-pdf"></i>
+                                    ${hotel.name}
+                                </div>
+                                <div class="hotel-meta">
+                                    <span class="chunk-count">
+                                        <i class="fas fa-puzzle-piece"></i>
+                                        ${hotel.chunk_count || 0} chunks
+                                    </span>
+                                    <span class="upload-date">
+                                        <i class="fas fa-clock"></i>
+                                        ${formatDate(hotel.uploaded_at)}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="hotel-actions">
+                                <a href="/chat?hotel=${hotel.key}" class="btn-small btn-primary" title="Chat with this document">
+                                    <i class="fas fa-comments"></i>
+                                </a>
+                                <a href="/browse/${hotel.key}" class="btn-small btn-secondary" title="Browse document content">
+                                    <i class="fas fa-search"></i>
+                                </a>
+                                <button onclick="deleteHotel('${hotel.key}')" class="btn-small btn-danger" title="Delete document">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    hotelListEl.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-upload"></i>
+                            <p>No documents uploaded yet</p>
+                            <p class="text-muted">Upload your first hotel brochure to get started</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to load hotels:', error);
+                document.getElementById("hotel-list").innerHTML = `
+                    <div class="error">
+                        <i class="fas fa-exclamation-circle"></i>
+                        Failed to load documents. Please try again.
+                    </div>
+                `;
+            }
+        }
+
+        function formatDate(dateString) {
+            if (!dateString || dateString === 'Unknown') return 'Unknown';
+            try {
+                const date = new Date(dateString);
+                return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            } catch {
+                return 'Unknown';
+            }
+        }
+
+        async function deleteHotel(key) {
+            if (!confirm('Are you sure you want to delete this hotel document? This action cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/delete/${key}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    showResult('Hotel document deleted successfully', 'success');
+                    loadHotels();
+                } else {
+                    const error = await response.json();
+                    showResult(`Failed to delete: ${error.error}`, 'error');
+                }
+            } catch (error) {
+                showResult(`Delete failed: ${error.message}`, 'error');
+            }
+        }
+
+        function showResult(message, type) {
+            const resultEl = document.getElementById('result');
+            resultEl.className = `result-container ${type}`;
+            resultEl.innerHTML = `
+                <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>
+                ${message}
+            `;
+            resultEl.style.display = 'block';
+
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                resultEl.style.display = 'none';
+            }, 5000);
+        }
+
+        function showProgress(show, text = 'Processing...') {
+            const progressEl = document.getElementById('upload-progress');
+            const progressText = document.getElementById('progressText');
+
+            if (show) {
+                progressEl.classList.remove('hidden');
+                progressText.textContent = text;
+            } else {
+                progressEl.classList.add('hidden');
+            }
+        }
+
+        // Upload form handling
+        document.getElementById("uploadForm").addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            if (uploadInProgress) return;
+
+            const fileInput = document.getElementById('files');
+            if (!fileInput.files.length) {
+                showResult('Please select at least one PDF file', 'error');
+                return;
+            }
+
+            uploadInProgress = true;
+            const uploadBtn = document.getElementById('uploadBtn');
+            const originalBtnText = uploadBtn.innerHTML;
+
+            uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+            uploadBtn.disabled = true;
+            showProgress(true);
+
+            try {
+                const formData = new FormData();
+                for (let file of fileInput.files) {
+                    formData.append('files[]', file);
+                }
+
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    let message = `Successfully processed ${result.indexed.length} file(s)`;
+                    if (result.errors && result.errors.length > 0) {
+                        message += `\nWarnings: ${result.errors.join(', ')}`;
+                    }
+                    showResult(message, 'success');
+                    loadHotels();
+
+                    // Reset form
+                    fileInput.value = '';
+                    fileInputLabel.textContent = 'Choose PDF files or drag & drop';
+                } else {
+                    showResult(`Upload failed: ${result.error}`, 'error');
+                }
+            } catch (error) {
+                showResult(`Upload error: ${error.message}`, 'error');
+            } finally {
+                uploadInProgress = false;
+                uploadBtn.innerHTML = originalBtnText;
+                uploadBtn.disabled = false;
+                showProgress(false);
+            }
+        });
+
+        // Load hotels on page load
+        loadHotels();
+    </script>
+</body>
+</html>
