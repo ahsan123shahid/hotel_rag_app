@@ -5,3 +5,4 @@ faiss-cpu
 cohere
 werkzeug
 gunicorn
+python-dotenv
