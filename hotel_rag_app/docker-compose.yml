@@ -1,11 +1,11 @@
+version: "3.8"
+
 services:
   hotel-rag:
     build: .
     container_name: hotel_rag_app
     ports:
       - "5000:5000"
-    environment:
-      - COHERE_API_KEY=${COHERE_API_KEY}
-    volumes:
-      - ./uploads:/app/uploads
-      - ./indices:/app/indices
+    env_file:
+      - .env
+    restart: always
