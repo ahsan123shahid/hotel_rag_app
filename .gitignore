@@ -1,0 +1,30 @@
+# Secrets
+.env
+hotel_rag_app/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+*.egg
+
+# Runtime data
+uploads/
+indices/
+hotels.json
+
+# IDE
+.idea/
+.vscode/
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

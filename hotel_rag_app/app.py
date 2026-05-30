@@ -1,15 +1,20 @@
-import os, json, uuid, logging
-from flask import Flask, request, render_template, jsonify, send_from_directory
+import os
+import json
+import uuid
+import logging
+import re
+import shutil
+import requests
+from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 from datetime import datetime
 
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.docstore.document import Document
+from langchain_text_splitters import CharacterTextSplitter
+from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
-from langchain_cohere import ChatCohere, CohereEmbeddings
-from langchain.schema import HumanMessage
+from langchain_cohere import CohereEmbeddings
 
 # ---------------- Config ----------------
 load_dotenv()
@@ -26,56 +31,55 @@ logger = logging.getLogger(__name__)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(INDEX_FOLDER, exist_ok=True)
 
-app = Flask(__name__, static_folder="static", template_folder="templates")
+# Point static folder to React build output folder
+app = Flask(__name__, static_folder="../frontend/dist", static_url_path="")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE
 
 COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
 if not COHERE_API_KEY:
     raise RuntimeError("COHERE_API_KEY missing in .env")
+if not GROQ_API_KEY:
+    raise RuntimeError("GROQ_API_KEY missing in .env")
 
 try:
-    llm = ChatCohere(model="command-r-plus-08-2024", cohere_api_key=COHERE_API_KEY)
     embeddings = CohereEmbeddings(model="embed-english-v3.0", cohere_api_key=COHERE_API_KEY)
-    logger.info("Cohere models initialized successfully")
+    logger.info("Cohere embeddings initialized successfully")
 except Exception as e:
-    logger.error(f"Failed to initialize Cohere models: {e}")
+    logger.error(f"Failed to initialize Cohere embeddings: {e}")
     raise
 
 INDICES = {}
-
 
 # --------- Helpers ----------
 def load_meta():
     """Load hotel metadata from file"""
     if os.path.exists(META_FILE):
         try:
-            with open(META_FILE, "r") as f:
+            with open(META_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except json.JSONDecodeError:
             logger.warning(f"Invalid JSON in {META_FILE}, starting fresh")
             return {}
     return {}
 
-
 def save_meta(data):
     """Save hotel metadata to file"""
     try:
-        with open(META_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        with open(META_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
         logger.info("Metadata saved successfully")
     except Exception as e:
         logger.error(f"Failed to save metadata: {e}")
         raise
 
-
 HOTELS = load_meta()
-
 
 def allowed_file(filename):
     """Check if file extension is allowed"""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
 
 def extract_text_from_pdf(path):
     """Extract text from PDF file with error handling"""
@@ -98,7 +102,6 @@ def extract_text_from_pdf(path):
         logger.error(f"Failed to extract text from {path}: {e}")
         raise
 
-
 def index_pdf(path, key):
     """Index a PDF file into vector store"""
     try:
@@ -111,12 +114,9 @@ def index_pdf(path, key):
         splitter = CharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
-            separator="\n",
-            length_function=len
+            separator="\n"
         )
         chunks = splitter.split_text(text)
-
-        # Filter out very short chunks
         valid_chunks = [c for c in chunks if len(c.strip()) > 50]
 
         if not valid_chunks:
@@ -146,7 +146,6 @@ def index_pdf(path, key):
         logger.error(f"Failed to index PDF {path}: {e}")
         raise
 
-
 def load_index(key):
     """Load vector store index for a hotel"""
     if key in INDICES:
@@ -165,11 +164,29 @@ def load_index(key):
 
     raise FileNotFoundError(f"No index found for hotel key: {key}")
 
+def call_groq(messages):
+    """Helper to query the Groq Cloud Chat completions API"""
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "llama-3.1-8b-instant",
+        "messages": messages,
+        "temperature": 0.2
+    }
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers=headers,
+        json=data,
+        timeout=30
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
 
 def classify_category(query):
-    """Classify query into predefined categories"""
+    """Classify query into predefined categories using Groq"""
     categories = ["Rates", "Transfers", "Policies", "Offers", "General", "Amenities", "Location"]
-
     try:
         prompt = f"""Classify this hotel-related query into one of these categories:
 Categories: {', '.join(categories)}
@@ -177,21 +194,19 @@ Categories: {', '.join(categories)}
 Query: {query}
 
 Return only the most appropriate category name."""
-
-        resp = llm.invoke([HumanMessage(content=prompt)])
-        category = resp.content.strip().split()[0]
+        resp_content = call_groq([{"role": "user", "content": prompt}])
+        category = resp_content.strip().split()[0]
         return category if category in categories else "General"
     except Exception as e:
         logger.warning(f"Failed to classify query: {e}")
         return "General"
 
-
 def rag_answer(key, query):
-    """Generate RAG-based answer for a query"""
+    """Generate RAG-based answer for a query using Groq"""
     try:
         vs = load_index(key)
         retriever = vs.as_retriever(search_kwargs={"k": 5})
-        docs = retriever.get_relevant_documents(query)
+        docs = retriever.invoke(query)
 
         if not docs:
             return {
@@ -227,10 +242,10 @@ Instructions:
 
 Answer:"""
 
-        resp = llm.invoke([HumanMessage(content=prompt)])
+        resp_content = call_groq([{"role": "user", "content": prompt}])
 
         return {
-            "answer": resp.content.strip(),
+            "answer": resp_content.strip(),
             "citations": list(set([doc.metadata.get('source', 'Unknown') for doc in docs])),
             "category": category,
             "chunks_used": len(docs)
@@ -244,63 +259,52 @@ Answer:"""
             "category": "General"
         }
 
-
 # --------- Routes ----------
 @app.route("/")
 def home():
-    """Home page with upload interface"""
-    return render_template("index.html")
-
+    """Home page - Serve React index.html"""
+    return send_from_directory(app.static_folder, "index.html")
 
 @app.route("/chat")
 def chat():
-    """Chat interface"""
-    hotel_key = request.args.get('hotel')
-    return render_template("chat.html", selected_hotel=hotel_key)
-
+    """Chat page - Redirect to React SPA home"""
+    return send_from_directory(app.static_folder, "index.html")
 
 @app.route("/browse/<key>")
 def browse(key):
-    """Browse indexed content for a hotel"""
+    """Browse page - Redirect to React SPA home"""
+    return send_from_directory(app.static_folder, "index.html")
+
+@app.route("/chunks/<key>")
+def get_chunks(key):
+    """JSON API to fetch all indexed text passages for browser tab"""
     try:
         vs = load_index(key)
-        # Get more diverse content by using different queries
         queries = ["hotel information", "rates prices", "amenities facilities", "policies rules"]
         all_docs = []
-
         for query in queries:
-            docs = vs.as_retriever(search_kwargs={"k": 10}).get_relevant_documents(query)
+            docs = vs.as_retriever(search_kwargs={"k": 10}).invoke(query)
             all_docs.extend(docs)
 
-        # Remove duplicates and group by source
         seen_chunks = set()
-        grouped = {}
-
+        chunks = []
         for doc in all_docs:
-            chunk_id = f"{doc.metadata['source']}-{doc.metadata['chunk']}"
+            chunk_id = f"{doc.metadata.get('source', 'Unknown')}-{doc.metadata.get('chunk', 0)}"
             if chunk_id not in seen_chunks:
                 seen_chunks.add(chunk_id)
-                source = doc.metadata['source']
-                if source not in grouped:
-                    grouped[source] = []
-
-                grouped[source].append({
-                    "chunk": doc.metadata['chunk'],
-                    "text": doc.page_content[:500] + ("..." if len(doc.page_content) > 500 else ""),
-                    "indexed_at": doc.metadata.get('indexed_at', 'Unknown')
+                chunks.append({
+                    "chunk": doc.metadata.get("chunk", 0),
+                    "source": doc.metadata.get("source", "Unknown"),
+                    "text": doc.page_content,
+                    "indexed_at": doc.metadata.get("indexed_at", "Unknown")
                 })
-
-        # Sort chunks within each source
-        for source in grouped:
-            grouped[source].sort(key=lambda x: x['chunk'])
-
-        hotel_info = HOTELS.get(key, {})
-        return render_template("browse.html", hotel=hotel_info, sources=grouped, hotel_key=key)
-
+        
+        # Sort by source name and chunk number
+        chunks.sort(key=lambda x: (x["source"], x["chunk"]))
+        return jsonify({"chunks": chunks})
     except Exception as e:
-        logger.error(f"Failed to browse hotel {key}: {e}")
-        return render_template("browse.html", hotel={}, error=str(e), hotel_key=key)
-
+        logger.error(f"Failed to fetch chunks for {key}: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -331,8 +335,6 @@ def upload():
 
                     # Generate unique key
                     base_key = os.path.splitext(filename)[0]
-                    # Clean the key to be URL-safe
-                    import re
                     base_key = re.sub(r'[^a-zA-Z0-9_-]', '_', base_key)
                     key = base_key
                     counter = 1
@@ -382,10 +384,9 @@ def upload():
         logger.error(f"Upload endpoint error: {e}")
         return jsonify({"error": f"Upload failed: {str(e)}"}), 500
 
-
 @app.route("/ask", methods=["POST"])
 def ask():
-    """Handle chat queries"""
+    """Handle chat queries using Groq Cloud RAG"""
     try:
         data = request.get_json()
         if not data:
@@ -411,7 +412,6 @@ def ask():
         logger.error(f"Ask endpoint error: {e}")
         return jsonify({"error": f"Failed to process query: {str(e)}"}), 500
 
-
 @app.route("/hotels")
 def hotels():
     """Get list of available hotels"""
@@ -432,7 +432,6 @@ def hotels():
         logger.error(f"Hotels endpoint error: {e}")
         return jsonify({"error": "Failed to load hotels"}), 500
 
-
 @app.route("/delete/<key>", methods=["DELETE"])
 def delete_hotel(key):
     """Delete a hotel and its associated files"""
@@ -451,7 +450,6 @@ def delete_hotel(key):
         # Delete index
         index_path = os.path.join(INDEX_FOLDER, key)
         if os.path.exists(index_path):
-            import shutil
             shutil.rmtree(index_path)
 
         # Remove from memory and metadata
@@ -468,7 +466,6 @@ def delete_hotel(key):
         logger.error(f"Delete endpoint error: {e}")
         return jsonify({"error": f"Failed to delete hotel: {str(e)}"}), 500
 
-
 @app.route("/health")
 def health():
     """Health check endpoint"""
@@ -478,18 +475,16 @@ def health():
         "indices_loaded": len(INDICES)
     })
 
-
 @app.errorhandler(413)
 def too_large(e):
     return jsonify({"error": f"File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)}MB"}), 413
-
 
 @app.errorhandler(Exception)
 def handle_error(e):
     logger.error(f"Unhandled error: {e}")
     return jsonify({"error": "An internal error occurred"}), 500
 
-
 if __name__ == "__main__":
-    logger.info("Starting Hotel RAG System")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    logger.info("Starting Hotel RAG System with Groq")
+    port = int(os.environ.get("PORT", 7860))
+    app.run(debug=True, host='0.0.0.0', port=port)

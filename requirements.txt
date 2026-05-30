@@ -1,0 +1,10 @@
+streamlit>=1.40.0
+Flask
+PyPDF2
+langchain
+langchain-community
+langchain-cohere
+faiss-cpu
+python-dotenv
+cohere
+gunicorn
